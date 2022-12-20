@@ -15,9 +15,6 @@ import requests
 import numpy as np
 import pandas as pd
 
-from reV.config.project_points import ProjectPoints
-from reV.generation.generation import Gen
-
 # Silence warnings...
 pd.options.mode.chained_assignment = None
 
@@ -62,10 +59,10 @@ lmp_file = os.path.join(here, 'data/lmps_2021.csv')
 #--- OUTPUT ---# 
 
 # ISO-NE generated emissions profile. 
-generated_emissions_file = os.path.join(here, 'output/generated_emissions_profile.csv')
+grid_gen_file = os.path.join(here, 'output/grid_generation_profile.csv')
 
 # King Pine avoided emissions profile. 
-avoided_emissions_file = os.path.join(here, 'output/avoided_emissions_profile.csv')
+wind_gen_file = os.path.join(here, 'output/wind_generation_profile.csv')
 
 def wtk():
      '''Get Wind Toolkit data.'''
@@ -90,43 +87,6 @@ def wtk():
           f.write(response.text)
 
      return
-
-def rev():
-     '''Run reV model to obtain capacity factor profile for King Pine wind farm.'''
-
-     # TODO: retrieve relevant wind resource file from WIND Toolkit via wtk().
-     # TODO: download SAM configuration file that matches wind farm specifications. 
-          
-     # Array of coordinates.
-     lat_lons = np.array([[lat, lon]])
-
-     # Create Project Points.
-     pp = ProjectPoints.lat_lon_coords(lat_lons, res_file, sam_file)
-
-     # Run reV.
-     results = Gen.reV_run('windpower', pp, sam_file, res_file, max_workers=1, out_fpath=None, output_request=('cf_profile'))
-
-     # Convert capacity factor profile into generation profile. 
-     gen = results.out['cf_profile'] * nameplate_cap
-     
-     return gen
-
-def sam(): 
-     '''Load SAM generation profile for King Pine wind farm.'''
-
-     # Read SAM generation data.
-     gen = pd.read_csv(sam_gen_file)
-
-     # Convert date column from string to datetime. 
-     gen['Date'] = pd.to_datetime(gen['Time stamp'], format='%b %d, %I:%M %p').dt.strftime('%m-%d %H:%M')
-
-     # Convert generation to MW.
-     gen['Generation (MWh)'] = gen['System power generated | (kW)'] / 1000
-
-     # Reformat dataframe.
-     gen = gen[['Date', 'Generation (MWh)']]
-
-     return gen
 
 def ver(): 
      '''Calculate generation profile for King Pine wind farm from VER wind speed data.'''
@@ -161,6 +121,23 @@ def ver():
 
      # TODO: calculate generation profile from wind speed using turbine power curve. 
      gen = None
+
+     return gen
+
+def sam(): 
+     '''Load SAM generation profile for King Pine wind farm.'''
+
+     # Read SAM generation data.
+     gen = pd.read_csv(sam_gen_file)
+
+     # Convert date column from string to datetime. 
+     gen['Date'] = pd.to_datetime(gen['Time stamp'], format='%b %d, %I:%M %p').dt.strftime('%m-%d %H:%M')
+
+     # Convert generation to MW.
+     gen['Generation (MWh)'] = gen['System power generated | (kW)'] / 1000
+
+     # Reformat dataframe.
+     gen = gen[['Date', 'Generation (MWh)']]
 
      return gen
 
@@ -317,14 +294,14 @@ def lmp(location_id):
 def emissions(grid_gens, wind_gens, lmps):
      '''Calculates the emissions impact of the King Pine wind farm.'''
 
-     # Dictionary of CO2 emissions rates (lbs CO2/MWh) for EPA eGRID's NPCC New England subregion (NEWE) in 2020. 
+     # Dictionary of CO2 emissions rates (lbs CO2/MWh) from EPA eGRID's NPCC New England subregion in 2020. 
      co2_emissions_rates = {
           'Oil': 3374.668,
           'Coal': 2277.021,
           'Natural Gas': 850.537,
           'Refuse': 0.0, # biomass is part of carbon cycle
           'Wood': 0.0, # biomass is part of carbon cycle
-          'Landfill Gas': 0.0, # no additional carbon emissions because flared otherwise
+          'Landfill Gas': 0.0, # flared otherwise
           'Nuclear': 0.0,
           'Hydro': 0.0,
           'Solar': 0.0,
@@ -338,15 +315,9 @@ def emissions(grid_gens, wind_gens, lmps):
      # Map CO2 emissions rates by fuel type.
      grid_gens['Emissions Rate (lbs CO2/MWh)'] = grid_gens['Fuel Category'].map(co2_emissions_rates)
 
-     # Add column for CO2 emissions to grid generation.
-     grid_gens['Emissions (lbs CO2)'] = grid_gens['Generation (MWh)'] * grid_gens['Emissions Rate (lbs CO2/MWh)']
-
      # Add column for marginal CO2 emissions rate (before and after). 
      wind_gens['Marginal Emissions Rate (lbs CO2/MWh) - Before'] = None
      wind_gens['Marginal Emissions Rate (lbs CO2/MWh) - After'] = None
-
-     # Add column for CO2 emissions avoided per hour to new generation. 
-     wind_gens['Avoided Emissions (lbs CO2)'] = 0
 
      # Add column for curtailment flag. 
      wind_gens['Curtailed'] = False
@@ -356,7 +327,7 @@ def emissions(grid_gens, wind_gens, lmps):
           #--- WIND GENERATION ---#
 
           # Get new generation for hour. 
-          new_gen = wind_gens.loc[wind_gens['Date'] == hour]['Generation (MWh)'].iloc[0]
+          wind_gen = wind_gens.loc[wind_gens['Date'] == hour]['Generation (MWh)'].iloc[0]
 
           # --- MARGINAL GENERATOR --- #
 
@@ -375,8 +346,6 @@ def emissions(grid_gens, wind_gens, lmps):
           # Get marginal grid generation.
           marginal_grid_gen = margin['Generation (MWh)'].sum()
 
-          # Place artificial ceiling on marginal grid generation. 
-
           # Calculate load-weighted marginal C02 emissions rate (before).
           marginal_emissions_rate_before = margin.groupby('Date').apply(lambda x: np.average(x['Emissions Rate (lbs CO2/MWh)'], weights=x['Generation (MWh)'])).iloc[0]
      
@@ -384,22 +353,22 @@ def emissions(grid_gens, wind_gens, lmps):
           marginal_emissions_rate_after = marginal_emissions_rate_before
 
           #--- LOCATIONAL MARGINAL PRICE ---#
+
+          # Fetch LMPs. 
           lmp = lmps.loc[lmps['Date'] == hour]['Locational Marginal Price'].iloc[0]
 
-          #--- AVOIDED CO2 EMISSIONS ---#
-
-          # Avoided CO2 emissions.
-          avoided_emissions = 0
+          #--- MARGINAL CO2 EMISSIONS RATE ---#
 
           if lmp < threshold_price:
 
-               # Indicate economic curtailment. 
+               #--- CURTAILMENT ---#
+
+               # If LMP is less than threshold price, wind generation is curtailed.
                wind_gens.loc[wind_gens['Date'] == hour, 'Curtailed'] = True
 
-               # No emissions avoided. 
-               avoided_emissions = 0
+          elif (marginal_emissions_rate_before != 0) & (wind_gen > marginal_grid_gen):
 
-          elif new_gen > marginal_grid_gen:
+               #--- CHANGE IN FOSSIL FUEL ON MARGIN ---#
                
                # Pull non-marginal rows in hour from grid generation data.
                non_margin = grid_gens.loc[(grid_gens['Date'] == hour) & (grid_gens['Marginal Flag'] == 'No')]
@@ -407,35 +376,16 @@ def emissions(grid_gens, wind_gens, lmps):
                # Calculate load-weighted non-marginal CO2 emissions rate.
                non_marginal_emissions_rate = non_margin.groupby('Date').apply(lambda x: np.average(x['Emissions Rate (lbs CO2/MWh)'], weights=x['Generation (MWh)'])).iloc[0]
 
-               # Avoided CO2 emissions from marginal fuel type. 
-               emissions_comp_1 = marginal_emissions_rate_before * marginal_grid_gen
-
-               # Avoided CO2 emission from non-marginal fuel.
-               emissions_comp_2 = non_marginal_emissions_rate * (new_gen - marginal_grid_gen)
-
-               # Sum both components of avoided CO2 emissions. 
-               avoided_emissions = emissions_comp_1 + emissions_comp_2
-
                # Update marginal CO2 emissions rate (after) to non-marginal CO2 emissions rate.
-               marginal_emissions_rate_after = 0 # non_marginal_emissions_rate
-
-          else: 
-
-               # Avoided CO2 emissions from marginal fuel type. 
-               avoided_emissions = marginal_emissions_rate_before * new_gen
-
-          # Update avoided CO2 emissions. 
-          wind_gens.loc[wind_gens['Date'] == hour, 'Avoided Emissions (lbs CO2)'] = avoided_emissions
-
-          #--- MARGINAL EMISSIONS RATE ---#
+               marginal_emissions_rate_after = non_marginal_emissions_rate
 
           # Update marginal CO2 emissions rate (before and after). 
           wind_gens.loc[wind_gens['Date'] == hour, 'Marginal Emissions Rate (lbs CO2/MWh) - Before'] = marginal_emissions_rate_before
           wind_gens.loc[wind_gens['Date'] == hour, 'Marginal Emissions Rate (lbs CO2/MWh) - After'] = marginal_emissions_rate_after
 
      # Write dataframes to CSV.
-     grid_gens.to_csv(generated_emissions_file, index=False)
-     wind_gens.to_csv(avoided_emissions_file, index=False)
+     grid_gens.to_csv(grid_gen_file, index=False)
+     wind_gens.to_csv(wind_gen_file, index=False)
 
      return grid_gens, wind_gens
 
@@ -443,30 +393,27 @@ if __name__ == '__main__':
 
      #--- WIND GENERATION DATA ---#
 
-     # Method #1: Obtain wind generation profile for King Pine using NREL's reV tool.
-     # wind_gens = rev()
+     # Method #1: Calculate wind generation profile for King Pine from ISO-NE VER data. 
+     # wind_inputs = ver()
 
      # Method #2: Obtain wind generation profile for King Pine using NREL's SAM tool.
-     wind_gens = sam()
-
-     # Method #3: Calculate wind generation profile for King Pine from ISO-NE VER data. 
-     # wind_gens = ver()
+     wind_inputs = sam()
 
      #--- GRID GENERATION DATA ---#
 
-     grid_gens = None
+     grid_inputs = None
 
      # Method #1: Get grid generation by source using EIA's API.
      # if os.path.exists(eia_gen_file):
-     #      grid_gens = pd.read_csv(eia_gen_file)
+     #      grid_inputs = pd.read_csv(eia_gen_file)
      # else:
-     #      grid_gens = eia() 
+     #      grid_inputs = eia() 
 
      # Method #2: Get grid generation by source using ISO-NE's dispatch fuel mix data.
      if os.path.exists(iso_gen_file):
-          grid_gens = pd.read_csv(iso_gen_file)
+          grid_inputs = pd.read_csv(iso_gen_file)
      else: 
-          grid_gens = iso()
+          grid_inputs = iso()
 
      #--- LOCATIONAL MARGINAL PRICES ---#
 
@@ -479,9 +426,15 @@ if __name__ == '__main__':
           lmps = lmp(location_id)
 
      #--- EMISSIONS IMPACT --#
+     grid_output = None
+     wind_output = None
 
      # Calculate emissions impact of King Pine wind farm on ISO-NE grid.
-     grid_output, wind_output = emissions(grid_gens, wind_gens, lmps)
+     if os.path.exists(grid_gen_file) & os.path.exists(wind_gen_file):
+          grid_output = pd.read_csv(grid_gen_file)
+          wind_output = pd.read_csv(wind_gen_file)
+     else:
+          grid_output, wind_output = emissions(grid_inputs, wind_inputs, lmps)
 
      # TODO: verify generation totals.
      annual_grid_gen = grid_output['Generation (MWh)'].sum()
@@ -490,34 +443,23 @@ if __name__ == '__main__':
      print('Annual grid generation (MWh): ', annual_grid_gen)
      print('Annual wind generation (MWh): ', annual_wind_gen)
 
-     # TODO: verify avoided emissions.
-     annual_generated_emissions = grid_output['Emissions (lbs CO2)'].sum()
-     annual_avoided_emissions = wind_output['Avoided Emissions (lbs CO2)'].sum()
-
-     avg_co2_emissions_avoided = (annual_avoided_emissions)/(annual_wind_gen)
-     avg_co2_emissions_generated = (annual_generated_emissions)/(annual_grid_gen)
-
-     print('Average CO2 emissions avoided by King Pine generation (lbs CO2/MWh): ', avg_co2_emissions_avoided)
-     print('Average CO2 emission generated by ISO-NE generation (lbs CO2/MWh): ', avg_co2_emissions_generated)
-
-     # NOTE: EPA's eGRID average CO2 emissions rate for electricity generation in NEWE subregion was 528.24 lbs CO2/MWh. 
-
-     # TODO: verify marginal emissions impact. 
+     # TODO: verify load-weighted marginal CO2 emissions impact. 
      avg_mer_before = wind_output['Marginal Emissions Rate (lbs CO2/MWh) - Before'].mean()
      avg_mer_after = wind_output['Marginal Emissions Rate (lbs CO2/MWh) - After'].mean()
+     per_change_mer = (avg_mer_after - avg_mer_before)/(avg_mer_before)*100
 
-     print('Percentage change in average marginal CO2 emissions rate: ', ((avg_mer_after - avg_mer_before)/avg_mer_before)*100)
+     print('Percentage change in marginal CO2 emissions rate: ', per_change_mer)
 
      # Merges. 
      wind_output = wind_output.merge(lmps, on='Date')
 
      # TODO: verify curtailment. 
-     curtailed = wind_output.loc[wind_output['Locational Marginal Price'] < 4]
+     curtailed = wind_output.loc[wind_output['Curtailed'] == True]
      curtailed_gen = curtailed['Generation (MWh)'].sum()
+
      print('Curtailed hours: ', len(curtailed))
      print('Curtailed wind generation (MWh): ', curtailed_gen)
-     print('Curtailed wind generation (% generation)', (curtailed_gen/annual_wind_gen)*100)
-     print('Curtailed wind generation (% time)', (len(curtailed)/8760)*100)
+     print('Curtailed wind generation (%)', (curtailed_gen/annual_wind_gen)*100)
 
      #--- VALIDATE ---#
 
