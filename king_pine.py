@@ -29,9 +29,6 @@ lon = -68.169
 # Location ID of Maine load zone (load-weighted average of all pricing nodes in zone).
 location_id = 4001 
 
-# Nameplate capacity (MW). 
-nameplate_cap = 1000
-
 #--- PATH ---# 
 
 # Get path.
@@ -315,6 +312,9 @@ def emissions(grid_gens, wind_gens, lmps):
      # Map CO2 emissions rates by fuel type.
      grid_gens['Emissions Rate (lbs CO2/MWh)'] = grid_gens['Fuel Category'].map(co2_emissions_rates)
 
+     # Add column for CO2 emissions to grid generation.
+     grid_gens['Emissions (lbs CO2)'] = grid_gens['Generation (MWh)'] * grid_gens['Emissions Rate (lbs CO2/MWh)']
+
      # Add column for marginal CO2 emissions rate (before and after). 
      wind_gens['Marginal Emissions Rate (lbs CO2/MWh) - Before'] = None
      wind_gens['Marginal Emissions Rate (lbs CO2/MWh) - After'] = None
@@ -448,10 +448,9 @@ if __name__ == '__main__':
      avg_mer_after = wind_output['Marginal Emissions Rate (lbs CO2/MWh) - After'].mean()
      per_change_mer = (avg_mer_after - avg_mer_before)/(avg_mer_before)*100
 
+     print('MER before: ', avg_mer_before)
+     print('MER after: ', avg_mer_after)
      print('Percentage change in marginal CO2 emissions rate: ', per_change_mer)
-
-     # Merges. 
-     wind_output = wind_output.merge(lmps, on='Date')
 
      # TODO: verify curtailment. 
      curtailed = wind_output.loc[wind_output['Curtailed'] == True]
