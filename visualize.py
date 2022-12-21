@@ -82,16 +82,16 @@ if __name__ == '__main__':
     # gen.plot(x='Date', y=['Grid Generation (MWh)', 'Wind Generation (MWh)', 'Net Generation (MWh)'])
     # plt.show()
 
-    # Plot grid emissions as heat map. 
+    # Set up heat map. 
     gen['Day'] = pd.to_datetime(gen['Date'], format='%y-%m-%d %H:%M:%S').dt.dayofyear
     gen['Hour'] = pd.to_datetime(gen['Date'], format='%y-%m-%d %H:%M:%S').dt.hour
+
+    # Plot grid emissions as heat map. 
     pivot = gen.pivot(index='Hour', columns='Day', values='Emissions (lbs CO2)')
     map = sns.heatmap(pivot, cbar_kws={'label': 'Emissions (lbs CO2)'}, cmap='coolwarm')
     plt.show()
 
-    # Plot grid emissions as heat map. 
-    gen['Day'] = pd.to_datetime(gen['Date'], format='%y-%m-%d %H:%M:%S').dt.dayofyear
-    gen['Hour'] = pd.to_datetime(gen['Date'], format='%y-%m-%d %H:%M:%S').dt.hour
-    pivot = gen.pivot(index='Hour', columns='Day', values='Marginal Emissions Rate (lbs CO2/MWh) - Before')
-    map = sns.heatmap(pivot, cbar_kws={'label': 'Marginal Emissions Rate (lbs CO2/MWh) - Before'}, cmap='coolwarm')
+    # Plot wind generation as heat map. 
+    pivot = gen.pivot(index='Hour', columns='Day', values='Wind Generation (MWh)')
+    map = sns.heatmap(pivot, cbar_kws={'label': 'Wind Generation (MWh)'}, cmap='coolwarm')
     plt.show()
