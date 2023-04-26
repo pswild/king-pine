@@ -1,0 +1,8 @@
+# ignore compiled Python
+__pycache__/
+
+# ignore DS_Stores
+*.DS_Store
+
+# ignore Jupyter Notebooks
+*.ipynb_checkpoints
